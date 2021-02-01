@@ -36,8 +36,6 @@ object DeBruijn {
     }
   }
   def from3[T](exp: Lambda.Exp[T]) = new From3[T].get(Arg(exp, Map.empty, 0))
-
-
 }
 
 
