@@ -18,24 +18,32 @@ trait Recursion[Arg, Ret, Symbol] {
     var argStack = List[Arg](init)
     var opsStack = List[(Symbol, Int)]()
 
+    def popArg = { val arg :: rest = argStack ; argStack = rest ; arg }
+    def popRet = { val ret :: rest = retStack ; retStack = rest ; ret }
+
     while (argStack.nonEmpty) {
-      val fst :: rest = argStack
-      argStack = rest
-      dispatcher(fst) match {
-        case Left(ret) => retStack ::= ret
+      dispatcher(popArg) match {
+        case Left(ret) =>
+          retStack ::= ret
+          opsStack ::= null.asInstanceOf[Symbol] -> 0
         case Right((op, args)) =>
           argStack = args reverse_::: argStack
           opsStack ::= op -> args.length
       }
     }
 
-    while (opsStack.nonEmpty) {
-      val (op, i) :: opRest = opsStack
-      opsStack = opRest
-      val (args, retRest) = retStack.splitAt(i)
-      retStack = combinator(op, args) :: retRest
+    var recStack = List[Ret]()
+    def popRecs(i: Int) = {
+      var ls = List[Ret]()
+      1 to i foreach { _ => ls ::= recStack.head ; recStack = recStack.tail }
+      ls
     }
 
-    retStack.head
+    opsStack foreach {
+      case (_, 0) => recStack ::= popRet
+      case (op, i) => recStack = combinator(op, popRecs(i)) :: recStack
+    }
+
+    recStack.head
   }
 }

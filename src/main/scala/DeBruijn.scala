@@ -5,14 +5,22 @@ import scala.language.{existentials => ftr}
 object DeBruijn {
 
   trait Exp
-  case class Var(depth: Int) extends Exp
-  case class Abs(body: Exp) extends Exp
-  case class App(f: Exp, x: Exp) extends Exp
+  case class Var(depth: Int) extends Exp {
+    override def toString: String = depth.toString
+  }
+
+  case class Lam(body: Exp) extends Exp {
+    override def toString: String = s"(\\.$body)"
+  }
+
+  case class App(f: Exp, x: Exp) extends Exp {
+    override def toString: String = s"($f $x)"
+  }
 
   def from[T](exp: Lambda.Exp[T]) = {
-    def rec(e: Lambda.Exp[T], getDepth: Map[T, Int] = Map.empty, depth: Int = 0): Exp = exp match {
+    def rec(e: Lambda.Exp[T], getDepth: Map[T, Int] = Map.empty, depth: Int = 0): Exp = e match {
       case Lambda.Var(name)      => Var(depth - getDepth(name))
-      case Lambda.Abs(arg, body) => Abs(rec(body, getDepth.updated(arg, depth), depth + 1))
+      case Lambda.Lam(arg, body) => Lam(rec(body, getDepth.updated(arg, depth), depth + 1))
       case Lambda.App(f, x)      => App(rec(f, getDepth, depth), rec(x, getDepth, depth))
     }
 
@@ -25,13 +33,13 @@ object DeBruijn {
     override protected def dispatcher(arg: Arg[T]): Either[Exp, (Unit, List[Arg[T]])] = {
       val Arg(exp, map, depth) = arg
       exp match {
-        case Lambda.Var(name)      => Left(Var(map(name) - depth))
-        case Lambda.Abs(arg, body) => Right(() -> List(Arg(body, map.updated(arg, depth), depth + 1)))
+        case Lambda.Var(name)      => Left(Var(depth - map(name)))
+        case Lambda.Lam(arg, body) => Right(() -> List(Arg(body, map.updated(arg, depth), depth + 1)))
         case Lambda.App(f, x)      => Right(() -> List(Arg(f, map, depth), Arg(x, map, depth)))
       }
     }
     def combinator(op: Unit, ls: List[Exp]): Exp = ls match {
-      case List(body) => Abs(body)
+      case List(body) => Lam(body)
       case List(f, x) => App(f, x)
     }
   }
@@ -41,7 +49,15 @@ object DeBruijn {
 
 
 object Main extends App {
-  println(
-    fastparse.parse("""(\mul.\two.mul two two) (\m.\n.\f.m(n f)) (\f.\x.f (f x))""", Parse.exp(_))
-  )
+  val expr1 = fastparse.parse(
+    LazyList(
+      """(\mul.\two.mul two two) (\m.\n.\f.m(n f)) (\f.\x.f (f x))""",
+      """(\m.\n.\f.m(n f))""",
+    ).head,
+    Lambda.Parse.exp(_)
+  ).get.value
+
+  println(expr1)
+  println(DeBruijn.from(expr1))
+  println(DeBruijn.from3(expr1))
 }
