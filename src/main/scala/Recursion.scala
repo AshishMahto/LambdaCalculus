@@ -47,3 +47,27 @@ trait Recursion[Arg, Ret, Symbol] {
     recStack.head
   }
 }
+
+
+/** A version for recursive functions that don't require a symbol.
+ * (i.e, recursive cases have distinct numbers of recursive calls */
+trait Recursion_NoSymbol[Arg, Ret] { self =>
+  /** Handle a base case, or a recursive case, exposing all recursive calls required to complete it.
+   * @return Ret - a return value for a base case. <br>
+   *      Symbol - a "name" for this recursive case, to be used later <br>
+   *   List[Arg] - a list of recursive calls required to complete this base case */
+  protected def dispatcher(arg: Arg): Either[Ret, List[Arg]]
+
+  /** Handle the rest of the recursive case, combining the recursive results into a value.
+   * @param ls An equivalent list of recursive results from earlier. */
+  protected def combinator(ls: List[Ret]): Ret
+
+  private val inner = new Recursion[Arg, Ret, Unit] {
+    def combinator(op: Unit, ls: List[Ret]): Ret = self.combinator(ls)
+
+    def dispatcher(arg: Arg): Either[Ret, (Unit, List[Arg])] = self.dispatcher(arg).map(() -> _)
+  }
+
+  /** Run the recursion with an initial argument. */
+  def get(init: Arg): Ret = inner.get(init)
+}

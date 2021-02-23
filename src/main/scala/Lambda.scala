@@ -1,3 +1,4 @@
+
 object Lambda {
   sealed trait Exp[T] { def freeVars: Set[T] }
   protected class FreeVars[T](val freeVars: Set[T]) extends Exp[T]
@@ -10,7 +11,7 @@ object Lambda {
     import fastparse._
     import ScalaWhitespace.whitespace
 
-    def ident[_ : P]: P[String] = P(CharsWhileIn("0-9a-zA-Z").!)
+    def ident[_ : P]: P[String] = P(CharsWhileIn("0-9a-zA-Z'").!)
 
     def variable[_ : P]: P[Var[String]] = P(ident) map Var.apply
 
@@ -18,7 +19,7 @@ object Lambda {
 
     def exp[_ : P]: P[Exp[String]] = P((atom ~ &(End | ")")) | abs | app)
 
-    def abs[_ : P]: P[Lam[String]] = P("\\" ~ ident ~ "." ~ exp) map { case (x, b) => Lam(x, b) }
+    def abs[_ : P]: P[Lam[String]] = P(("\\" | "^" | "λ") ~ ident ~ "." ~ exp) map { case (x, b) => Lam(x, b) }
 
     def app[_ : P]: P[App[String]] = P(atom.rep(2)) map { case l::r::ls => ls.foldLeft(App(l,r))(App.apply) }
 

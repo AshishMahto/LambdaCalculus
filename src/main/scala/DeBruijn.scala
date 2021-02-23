@@ -1,63 +1,121 @@
-import scala.collection.mutable.Stack
-import scala.collection.mutable.ArrayBuffer
-import scala.language.{existentials => ftr}
+import scala.language.{existentials => ftr, implicitConversions}
+import scala.util.{ Try, Success}
+
 
 object DeBruijn {
 
-  trait Exp
-  case class Var(depth: Int) extends Exp {
-    override def toString: String = depth.toString
+  sealed trait Exp {
+    import Eval.Reduction
+    def aoe(reps: Int = 1): Reduction = Eval.aoe(this, reps)
+    def nor(reps: Int = 1): Reduction = Eval.nor(this, reps)
+    def eta(reps: Int = 1): Reduction = Eval.eta(this, reps)
+    def subst(sub: Exp): Exp = Eval.subst(this, sub)
+    def free(depth: Int): Set[Int]
+    def freeVars = free(1)
+  }
+
+  case class Free(name: String) extends Exp {
+    def free(depth: Int) = Try(depth - name.toInt).fold(_ => Set(), Set(_))
+    override def toString: String = name
+  }
+
+  case class Var(id: Int) extends Exp {
+    def free(depth: Int) = Set(depth - id)
+    override def toString: String = id.toString
   }
 
   case class Lam(body: Exp) extends Exp {
+    def free(depth: Int) = body.free(depth+1) - depth
     override def toString: String = s"(\\.$body)"
   }
 
   case class App(f: Exp, x: Exp) extends Exp {
+    def free(depth: Int) = f.free(depth) | x.free(depth)
     override def toString: String = s"($f $x)"
   }
 
   def from[T](exp: Lambda.Exp[T]) = {
-    def rec(e: Lambda.Exp[T], getDepth: Map[T, Int] = Map.empty, depth: Int = 0): Exp = e match {
-      case Lambda.Var(name)      => Var(depth - getDepth(name))
-      case Lambda.Lam(arg, body) => Lam(rec(body, getDepth.updated(arg, depth), depth + 1))
-      case Lambda.App(f, x)      => App(rec(f, getDepth, depth), rec(x, getDepth, depth))
+    def rec(e: Lambda.Exp[T], getDepth: Map[T, Int], depth: Int): Exp = e match {
+      case Lambda.Var(name) => getDepth.get(name).fold[Exp](Free(name.toString)) { i => Var(depth - i) }
+      case Lambda.Lam(x, m) => Lam(rec(m, getDepth.updated(x, depth), depth + 1))
+      case Lambda.App(f, x) => App(rec(f, getDepth, depth), rec(x, getDepth, depth))
     }
-
-    rec(exp)
+    rec(exp, Map(), 0)
   }
 
-  private case class Arg[T](exp: Lambda.Exp[T], getDepth: Map[T, Int], depth: Int)
-  private class From3[T] extends Recursion[Arg[T], Exp, Unit] {
 
-    override protected def dispatcher(arg: Arg[T]): Either[Exp, (Unit, List[Arg[T]])] = {
-      val Arg(exp, map, depth) = arg
-      exp match {
-        case Lambda.Var(name)      => Left(Var(depth - map(name)))
-        case Lambda.Lam(arg, body) => Right(() -> List(Arg(body, map.updated(arg, depth), depth + 1)))
-        case Lambda.App(f, x)      => Right(() -> List(Arg(f, map, depth), Arg(x, map, depth)))
+  object Eval {
+    case class Reduction(reduced: Exp, howMany: Int = 0) {
+      def addReps(i: Int) = this.copy(howMany = howMany + i)
+      def wrap(f: Exp => Exp): Reduction = this.copy(reduced = f(reduced))
+    }
+
+    def subst(exp: Exp, sub: Exp): Exp = {
+      def rename(sub: Int, depth: Int, exp: Exp): Exp = exp match {
+        case Free(_)   => exp
+        case Var(id)   => if (id < depth) Var(id) else Var(id + sub - 1)
+        case Lam(body) => Lam(rename(sub, depth + 1, body))
+        case App(f, x) => App(rename(sub, depth, f), rename(sub, depth, x))
+        }
+
+      def rec(exp: Exp, depth: Int): Exp = exp match {
+        case Free(_)   => exp
+        case Var(id)   =>
+               if (id < depth) Var(id)
+          else if (id > depth) Var(id - 1)
+          else rename(depth, 1, sub)
+        case Lam(body) => Lam(rec(body, depth + 1))
+        case App(f, x) => App(rec(f, depth), rec(x, depth))
       }
+
+      rec(exp, 1)
     }
-    def combinator(op: Unit, ls: List[Exp]): Exp = ls match {
-      case List(body) => Lam(body)
-      case List(f, x) => App(f, x)
+
+    def aoe(exp: Exp, reps: Int): Reduction = exp match {
+      case App(f, x) if reps > 0 =>
+        val Reduction(f_red, some) = f aoe reps
+        val Reduction(x_red, used) = x aoe (reps - some)
+
+        (f_red, reps - used) match {
+          case (Lam(b), r) if r > 0 => b subst x_red aoe r - 1 addReps used + 1
+          case _                    => Reduction(App(f_red, x_red), used)
+        }
+
+      case _ => Reduction(exp)
+    }
+
+    def eta(exp: Exp, reps: Int): Reduction = exp match {
+      case App(f, x) =>
+        val Reduction(f_red, some) = f eta reps
+        val Reduction(x_red, used) = x eta (reps - some)
+        Reduction(App(f_red, x_red), used)
+      case Lam(body) => body eta reps match {
+        case Reduction(App(f, Var(1)), used)
+          if used < reps && exp.freeVars(1) => Reduction(f, used + 1)
+        case x                              => x
+      }
+      case _ => Reduction(exp)
+    }
+
+    def norOne(exp: Exp): Reduction = exp match {
+      case App(Lam(b), x) => Reduction(b subst x, 1)
+      case App(f, x) =>
+        val Reduction(f_red, used1) = norOne(f)
+        val Reduction(x_red, used2) = if (used1 == 0) norOne(x) else Reduction(x)
+        Reduction(App(f_red, x_red), used1 + used2)
+
+      case Lam(body) => norOne(body) wrap Lam
+      case _         => Reduction(exp)
+    }
+
+    def nor(exp: Exp, reps: Int): Reduction = {
+      var cur = Reduction(exp)
+      1 to reps foreach { _ =>
+        val Reduction(nxt, done) = norOne(cur.reduced)
+        if (done == 0) return cur
+        cur = Reduction(nxt, cur.howMany + 1)
+      }
+      cur
     }
   }
-  def from3[T](exp: Lambda.Exp[T]) = new From3[T].get(Arg(exp, Map.empty, 0))
-}
-
-
-
-object Main extends App {
-  val expr1 = fastparse.parse(
-    LazyList(
-      """(\mul.\two.mul two two) (\m.\n.\f.m(n f)) (\f.\x.f (f x))""",
-      """(\m.\n.\f.m(n f))""",
-    ).head,
-    Lambda.Parse.exp(_)
-  ).get.value
-
-  println(expr1)
-  println(DeBruijn.from(expr1))
-  println(DeBruijn.from3(expr1))
 }
