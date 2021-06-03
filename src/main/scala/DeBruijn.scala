@@ -1,6 +1,4 @@
 import scala.language.{existentials => ftr, implicitConversions}
-import scala.util.{ Try, Success}
-
 
 object DeBruijn {
 
@@ -10,17 +8,17 @@ object DeBruijn {
     def nor(reps: Int = 1): Reduction = Eval.nor(this, reps)
     def eta(reps: Int = 1): Reduction = Eval.eta(this, reps)
     def subst(sub: Exp): Exp = Eval.subst(this, sub)
-    def free(depth: Int): Set[Int]
+    protected[DeBruijn] def free(depth: Int): Set[Int]
     def freeVars = free(1)
   }
 
   case class Free(name: String) extends Exp {
-    def free(depth: Int) = Try(depth - name.toInt).fold(_ => Set(), Set(_))
+    def free(depth: Int) = Set()
     override def toString: String = name
   }
 
   case class Var(id: Int) extends Exp {
-    def free(depth: Int) = Set(depth - id)
+    def free(depth: Int) = Set(depth - id + 1)
     override def toString: String = id.toString
   }
 
@@ -36,7 +34,7 @@ object DeBruijn {
 
   def from[T](exp: Lambda.Exp[T]) = {
     def rec(e: Lambda.Exp[T], getDepth: Map[T, Int], depth: Int): Exp = e match {
-      case Lambda.Var(name) => getDepth.get(name).fold[Exp](Free(name.toString)) { i => Var(depth - i) }
+      case Lambda.Var(name) => (getDepth get name fold[Exp] Free(name.toString)) { i => Var(depth - i) }
       case Lambda.Lam(x, m) => Lam(rec(m, getDepth.updated(x, depth), depth + 1))
       case Lambda.App(f, x) => App(rec(f, getDepth, depth), rec(x, getDepth, depth))
     }
@@ -50,24 +48,25 @@ object DeBruijn {
       def wrap(f: Exp => Exp): Reduction = this.copy(reduced = f(reduced))
     }
 
-    def subst(exp: Exp, sub: Exp): Exp = {
-      def rename(sub: Int, depth: Int, exp: Exp): Exp = exp match {
+    def rename(sub: Int, exp: Exp): Exp = {
+      def rec(exp: Exp, depth: Int): Exp = exp match {
         case Free(_)   => exp
         case Var(id)   => if (id < depth) Var(id) else Var(id + sub - 1)
-        case Lam(body) => Lam(rename(sub, depth + 1, body))
-        case App(f, x) => App(rename(sub, depth, f), rename(sub, depth, x))
-        }
-
+        case Lam(body) => Lam(rec(body, depth + 1))
+        case App(f, x) => App(rec(f, depth), rec(x, depth))
+      }
+      rec(exp, 1)
+    }
+    def subst(exp: Exp, sub: Exp): Exp = {
       def rec(exp: Exp, depth: Int): Exp = exp match {
         case Free(_)   => exp
         case Var(id)   =>
                if (id < depth) Var(id)
           else if (id > depth) Var(id - 1)
-          else rename(depth, 1, sub)
+          else rename(depth, sub)
         case Lam(body) => Lam(rec(body, depth + 1))
         case App(f, x) => App(rec(f, depth), rec(x, depth))
       }
-
       rec(exp, 1)
     }
 
@@ -91,8 +90,8 @@ object DeBruijn {
         Reduction(App(f_red, x_red), used)
       case Lam(body) => body eta reps match {
         case Reduction(App(f, Var(1)), used)
-          if used < reps && exp.freeVars(1) => Reduction(f, used + 1)
-        case x                              => x
+          if used < reps && !exp.freeVars(1) => Reduction(f, used + 1)
+        case x                               => x
       }
       case _ => Reduction(exp)
     }
