@@ -32,6 +32,8 @@ object DeBruijn {
     override def toString: String = s"($f $x)"
   }
 
+  def Apps(fst: Exp, snd: Exp, exps: Exp*) = exps.foldLeft(App(fst, snd))(App)
+
   def from[T](exp: Lambda.Exp[T]) = {
     def rec(e: Lambda.Exp[T], getDepth: Map[T, Int], depth: Int): Exp = e match {
       case Lambda.Var(name) => (getDepth get name fold[Exp] Free(name.toString)) { i => Var(depth - i) }
